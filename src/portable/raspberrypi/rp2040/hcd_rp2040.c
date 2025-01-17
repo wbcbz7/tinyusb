@@ -110,7 +110,9 @@ typedef struct
   volatile bool data_pending;
 } _control_xfer_t;
 
-static _control_xfer_t control_xfers[CFG_TUH_DEVICE_MAX+2]; // one for each device + the hub + dev adr 0
+#define TOTAL_DEVICES (CFG_TUH_DEVICE_MAX+CFG_TUH_HUB)
+#define CONTROL_XFERS_MAX_DEVICES (TOTAL_DEVICES+1)
+static _control_xfer_t control_xfers[CONTROL_XFERS_MAX_DEVICES]; // one for each device + one for each hub + dev adr 0
 static pending_host_transfer_t interrupt_xfers;
 static pending_host_transfer_t bulk_xfers;
 static active_host_transfert_t active_xfer = {NULL, -1};
@@ -118,11 +120,11 @@ static active_host_transfert_t active_xfer = {NULL, -1};
 static struct hw_endpoint *_hw_endpoint_allocate(uint8_t transfer_type);
 static void _hw_endpoint_init(struct hw_endpoint *ep, uint8_t dev_addr, uint8_t ep_addr, uint16_t wMaxPacketSize, uint8_t transfer_type, uint8_t bmInterval);
 
-// The highest dev_addr is CFG_TUH_DEVICE_MAX; hub address is CFG_TUH_DEVICE_MAX+1.
+// The highest dev_addr is CFG_TUH_DEVICE_MAX; hub address starts from CFG_TUH_DEVICE_MAX+1.
 // Let i be 0-15 for OUT endpoint and 16-31 for IN endpoints
 // Bit i in nak_mask[dev_addr - 1] is set if endpoint with index i
 // in device with dev_addr has sent NAK since the last SOF interrupt.
-static uint32_t nak_mask[CFG_TUH_DEVICE_MAX+1]; // +1 for hubs
+static uint32_t nak_mask[TOTAL_DEVICES];
 
 static uint32_t get_nak_mask_val(uint8_t edpt)
 {
@@ -985,7 +987,7 @@ bool hcd_edpt_xfer(uint8_t rhport, uint8_t dev_addr, uint8_t ep_addr, uint8_t * 
 
   if (ep_num == 0)
   {
-    TU_ASSERT(dev_addr < CFG_TUH_DEVICE_MAX+2);
+    TU_ASSERT(dev_addr < CFG_TUH_DEVICE_MAX+CFG_TUH_HUB+1);
     TU_ASSERT(control_xfers[dev_addr].data_pending == false);
     TU_ASSERT(control_xfers[dev_addr].setup_pending == false);
     // Disable the USB Host interrupt sources
@@ -1038,7 +1040,7 @@ bool hcd_edpt_abort_xfer(uint8_t rhport, uint8_t dev_addr, uint8_t ep_addr) {
 bool hcd_setup_send(uint8_t rhport, uint8_t dev_addr, uint8_t const setup_packet[8])
 {
   (void) rhport;
-  TU_ASSERT(dev_addr < CFG_TUH_DEVICE_MAX+2);
+  TU_ASSERT(dev_addr < CONTROL_XFERS_MAX_DEVICES);
   TU_ASSERT(control_xfers[dev_addr].data_pending == false);
   TU_ASSERT(control_xfers[dev_addr].setup_pending == false);
   // Disable the USB Host interrupt sources
