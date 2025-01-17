@@ -55,7 +55,12 @@ static_assert(PICO_USB_HOST_INTERRUPT_ENDPOINTS <= USB_MAX_ENDPOINTS, "");
 
 #define EP_POOL_NELEMENTS (1 + PICO_USB_HOST_INTERRUPT_ENDPOINTS)
 static struct hw_endpoint ep_pool[EP_POOL_NELEMENTS];
-#define epx (ep_pool[0])
+#define ep_control (ep_pool[0])
+static io_rw_32 ep_control_endpoint_control;
+static io_rw_32 ep_control_buffer_control;
+
+// the actual EPx hardware endpoint used for all transfers
+static struct hw_endpoint epx;
 
 // If the root hub is connected, this device defines
 // a variable pre such that pre is true if the device
@@ -327,16 +332,7 @@ static void __tusb_irq_path_func(hw_trans_complete)(void)
   }
 }
 
-static void __tusb_irq_path_func(_hw_setup_epx_from_ep)(struct hw_endpoint* ep) {
-  // Fill in endpoint control register with buffer offset
-  uint dpram_offset = hw_data_offset(ep->hw_data_buf);
-  // Bits 0-5 should be 0
-  assert(!(dpram_offset & 0b111111));
-  // set up epx to do an interrupt transfer; the polling interval does not matter
-  uint32_t ep_reg = EP_CTRL_ENABLE_BITS
-              | EP_CTRL_DOUBLE_BUFFERED_BITS | EP_CTRL_INTERRUPT_PER_DOUBLE_BUFFER
-              | (TUSB_XFER_INTERRUPT << EP_CTRL_BUFFER_TYPE_LSB)
-              | dpram_offset;
+static void __tusb_irq_path_func(_hw_setup_epx_from_ep_2)(struct hw_endpoint* ep, uint32_t ep_reg) {
   *epx.endpoint_control = ep_reg;
   *epx.buffer_control = *ep->buffer_control;
   epx.remaining_len = ep->remaining_len;
@@ -349,6 +345,21 @@ static void __tusb_irq_path_func(_hw_setup_epx_from_ep)(struct hw_endpoint* ep) 
   epx.dev_addr = ep->dev_addr;
   epx.ep_addr = ep->ep_addr;
   epx.transfer_type = ep->transfer_type;
+}
+
+static void __tusb_irq_path_func(_hw_setup_epx_from_ep)(struct hw_endpoint* ep) {
+   // Fill in endpoint control register with buffer offset
+  uint dpram_offset = hw_data_offset(ep->hw_data_buf);
+  // Bits 0-5 should be 0
+  assert(!(dpram_offset & 0b111111));
+  // set up epx to do an interrupt transfer; the polling interval does not matter
+  uint32_t ep_reg = EP_CTRL_ENABLE_BITS
+              | EP_CTRL_DOUBLE_BUFFERED_BITS | EP_CTRL_INTERRUPT_PER_DOUBLE_BUFFER
+              | (TUSB_XFER_INTERRUPT << EP_CTRL_BUFFER_TYPE_LSB)
+              | dpram_offset;
+
+  // setup remaining fields
+  _hw_setup_epx_from_ep_2(ep, ep_reg);
 }
 
 void __tusb_irq_path_func(_hw_epx_xfer_start)(uint8_t dev_addr, uint8_t ep_addr, uint8_t * buffer, uint16_t buflen)
@@ -433,14 +444,18 @@ static void __tusb_irq_path_func(hcd_schedule_next_transfer)()
       _hw_endpoint_init(ep, control_xfers[idx].daddr, 0x00, ep->wMaxPacketSize, 0, 0);
       assert(ep->configured);
 
-      // Set device address
-      usb_hw->dev_addr_ctrl = control_xfers[idx].daddr;
       ep->dev_addr = control_xfers[idx].daddr;
       ep->ep_addr = 0;
+
+      // copy context to EPx
+      _hw_setup_epx_from_ep_2(ep, *ep->endpoint_control);
+
+      // Set device address
+      usb_hw->dev_addr_ctrl = control_xfers[idx].daddr;
       // Set pre if we are a low speed device on full speed hub
-      COMPUTE_PRE(ep->dev_addr);
-      ep->remaining_len = 8;
-      ep->active = true;
+      COMPUTE_PRE(epx.dev_addr);
+      epx.remaining_len = 8;
+      epx.active = true;
       uint32_t const flags = SIE_CTRL_BASE | USB_SIE_CTRL_SEND_SETUP_BITS | USB_SIE_CTRL_START_TRANS_BITS |
                          (pre ? USB_SIE_CTRL_PREAMBLE_EN_BITS : 0);
 
@@ -456,6 +471,7 @@ static void __tusb_irq_path_func(hcd_schedule_next_transfer)()
     }
     else if (control_xfers[idx].data_pending)
     {
+      _hw_setup_epx_from_ep_2(&ep_control, *ep_control.endpoint_control);
       epx.dev_addr = control_xfers[idx].daddr;
       _hw_epx_xfer_start(control_xfers[idx].daddr, control_xfers[idx].edpt, control_xfers[idx].user_buffer, control_xfers[idx].total_len);
       control_xfers[idx].data_pending = false;
@@ -699,9 +715,9 @@ static struct hw_endpoint *_hw_endpoint_allocate(uint8_t transfer_type)
   }
   else
   {
-    ep = &epx;
-    ep->buffer_control = &usbh_dpram->epx_buf_ctrl;
-    ep->endpoint_control = &usbh_dpram->epx_ctrl;
+    ep = &ep_control;
+    ep->buffer_control = &ep_control_buffer_control;
+    ep->endpoint_control = &ep_control_endpoint_control;
     ep->hw_data_buf = &usbh_dpram->epx_data[0];
   }
 
@@ -751,7 +767,7 @@ static void _hw_endpoint_init(struct hw_endpoint *ep, uint8_t dev_addr, uint8_t 
   pico_trace("endpoint control (0x%p) <- 0x%lx\n", ep->endpoint_control, ep_reg);
   ep->configured = true;
 
-  if ( ep != &epx )
+  if ( ep != &ep_control )
   {
     // Endpoint has its own addr_endp and interrupt bits to be setup!
     // This is an interrupt/async endpoint. so need to set up ADDR_ENDP register with:
@@ -798,6 +814,10 @@ bool hcd_init(uint8_t rhport, const tusb_rhport_init_t* rh_init) {
 
   // clear epx and interrupt eps
   memset(&ep_pool, 0, sizeof(ep_pool));
+  memset(&epx, 0, sizeof(epx));
+  epx.buffer_control   = &usbh_dpram->epx_buf_ctrl;
+  epx.endpoint_control = &usbh_dpram->epx_ctrl;
+  epx.hw_data_buf      = &usbh_dpram->epx_data[0];
 
   // Enable in host mode with SOF / Keep alive on
   usb_hw->main_ctrl = USB_MAIN_CTRL_CONTROLLER_EN_BITS | USB_MAIN_CTRL_HOST_NDEVICE_BITS;
@@ -1051,7 +1071,7 @@ bool hcd_setup_send(uint8_t rhport, uint8_t dev_addr, uint8_t const setup_packet
   TU_ASSERT(control_xfers[dev_addr].data_pending == false);
   TU_ASSERT(control_xfers[dev_addr].setup_pending == false);
   // Disable the USB Host interrupt sources
-  hw_endpoint_lock_update(&epx, 1);
+  hw_endpoint_lock_update(&ep_control, 1);
   control_xfers[dev_addr].daddr = dev_addr;
   control_xfers[dev_addr].edpt = 0;
   control_xfers[dev_addr].total_len = 8;
@@ -1061,7 +1081,7 @@ bool hcd_setup_send(uint8_t rhport, uint8_t dev_addr, uint8_t const setup_packet
   }
   control_xfers[dev_addr].setup_pending = true;
   // Enable the USB Host interrupt
-  hw_endpoint_lock_update(&epx, -1);
+  hw_endpoint_lock_update(&ep_control, -1);
   // next call schedule_next_transfer() will start the transfer
   // if no other higher priority control transfer is pending
   return true;
