@@ -61,6 +61,15 @@ static void unaligned_memcpy(void *dst, const void *src, size_t n) {
     *dst_byte++ = *src_byte++;
   }
 }
+static void aligned_memcpy_word(void *dst, const void *src, size_t n) {
+  uint32_t *dst_byte = (uint32_t*)dst;
+  const uint32_t *src_byte = (const uint32_t*)src;
+  n >>= 2;
+  while (n--) {
+    *dst_byte++ = *src_byte++;
+  }
+}
+
 
 void rp2040_usb_init(void) {
   // Reset usb controller
@@ -132,7 +141,13 @@ static uint32_t __tusb_irq_path_func(prepare_ep_buffer)(struct hw_endpoint* ep, 
 
   if (!ep->rx) {
     // Copy data from user buffer to hw buffer
-    unaligned_memcpy(ep->hw_data_buf + buf_id * 64, ep->user_buf, buflen);
+    uint8_t *dst = ep->hw_data_buf + buf_id * 64;
+    // test if source and buffer length are word-aligned
+    if ((((uintptr_t)ep->user_buf | buflen) & 3) == 0) {
+      aligned_memcpy_word(dst, ep->user_buf, buflen);
+    } else {
+      unaligned_memcpy(dst, ep->user_buf, buflen);
+    }
     ep->user_buf += buflen;
 
     // Mark as full
@@ -236,7 +251,14 @@ static uint16_t __tusb_irq_path_func(sync_ep_buffer)(struct hw_endpoint* ep, uin
     // we have received AFTER we have copied it to the user buffer at the appropriate offset
     assert(buf_ctrl & USB_BUF_CTRL_FULL);
 
-    unaligned_memcpy(ep->user_buf, ep->hw_data_buf + buf_id * 64, xferred_bytes);
+    uint8_t *src = ep->hw_data_buf + buf_id * 64;
+    // test if source and buffer length are word-aligned
+    if ((((uintptr_t)ep->user_buf | xferred_bytes) & 3) == 0) {
+      aligned_memcpy_word(ep->user_buf, src, xferred_bytes);
+    } else {
+      unaligned_memcpy(ep->user_buf, src, xferred_bytes);
+    }
+    
     ep->xferred_len = (uint16_t) (ep->xferred_len + xferred_bytes);
     ep->user_buf += xferred_bytes;
   }
