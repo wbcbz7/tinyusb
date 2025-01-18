@@ -502,7 +502,7 @@ static void __tusb_irq_path_func(hcd_schedule_next_transfer)()
       bulk_xfers.idx = (int8_t)((bulk_xfers.idx+1) % bulk_xfers.n_pending);
       if (is_nak_mask_set(ep->dev_addr, ep->ep_addr))
       {
-        continue; // you only get to poll it once per frame
+        //continue; // you only get to poll it once per frame
       }
       _hw_setup_epx_from_ep(ep);
       active_xfer.pht = &bulk_xfers;
@@ -651,8 +651,9 @@ static void __tusb_irq_path_func(hcd_rp2040_irq)(void)
   {
     panic("Unhandled IRQ 0x%x\n", (uint) (status ^ handled));
   }
-  if (attached)
+  if (attached) {
     hcd_schedule_next_transfer();
+  }
 }
 
 void __tusb_irq_path_func(hcd_int_handler)(uint8_t rhport, bool in_isr) {
@@ -1020,11 +1021,17 @@ bool hcd_edpt_xfer(uint8_t rhport, uint8_t dev_addr, uint8_t ep_addr, uint8_t * 
     // Add the transfer to the appropriate pending transfer list
     if (!hw_add_pending_xfer(next_list, (uint8_t)ep_idx))
       panic("Cannot schedule new xfer\r\n");
-
-    hcd_schedule_next_transfer();
   }
   // next call schedule_next_transfer() will start the transfer
   // if no other higher priority transfer is pending
+  
+  // schedule next transfer
+  // KLUDGE KLUDGE KLUDGE - disable interrupts for the hcd_schedule_next_transfer() duration
+  if (1) {
+    uint32_t saved_irqs=save_and_disable_interrupts();
+    hcd_schedule_next_transfer();
+    restore_interrupts(saved_irqs);
+  }
 
   return true;
 }
