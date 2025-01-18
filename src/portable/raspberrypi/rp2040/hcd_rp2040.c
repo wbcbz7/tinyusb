@@ -473,7 +473,7 @@ static void __tusb_irq_path_func(hcd_schedule_next_transfer)()
     {
       int8_t pool_idx = (int8_t)interrupt_xfers.pending[interrupt_xfers.idx];
       struct hw_endpoint* ep = ep_pool + pool_idx;
-      interrupt_xfers.idx = (int8_t)((interrupt_xfers.idx+1) % interrupt_xfers.n_pending);
+      interrupt_xfers.idx = (int8_t)(interrupt_xfers.idx+1); if (interrupt_xfers.idx == interrupt_xfers.n_pending) interrupt_xfers.idx = 0;
       if (is_nak_mask_set(ep->dev_addr, ep->ep_addr))
       {
         continue; // you only get to poll it once per frame
@@ -499,7 +499,7 @@ static void __tusb_irq_path_func(hcd_schedule_next_transfer)()
     {
       int8_t pool_idx = (int8_t)bulk_xfers.pending[bulk_xfers.idx];
       struct hw_endpoint* ep = ep_pool + pool_idx;
-      bulk_xfers.idx = (int8_t)((bulk_xfers.idx+1) % bulk_xfers.n_pending);
+      bulk_xfers.idx = (int8_t)(bulk_xfers.idx+1); if (bulk_xfers.idx == bulk_xfers.n_pending) bulk_xfers.idx = 0;
       if (is_nak_mask_set(ep->dev_addr, ep->ep_addr))
       {
         //continue; // you only get to poll it once per frame
