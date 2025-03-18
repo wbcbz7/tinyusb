@@ -355,7 +355,7 @@ static void __tusb_irq_path_func(_hw_setup_epx_from_ep)(struct hw_endpoint* ep) 
   // set up epx to do an interrupt transfer; the polling interval does not matter
   uint32_t ep_reg = EP_CTRL_ENABLE_BITS
               | EP_CTRL_DOUBLE_BUFFERED_BITS | EP_CTRL_INTERRUPT_PER_DOUBLE_BUFFER
-              | (TUSB_XFER_INTERRUPT << EP_CTRL_BUFFER_TYPE_LSB)
+              | (ep->transfer_type << EP_CTRL_BUFFER_TYPE_LSB)
               | dpram_offset;
 
   // setup remaining fields
@@ -518,7 +518,7 @@ static void __tusb_irq_path_func(hcd_schedule_next_transfer)()
       bulk_xfers.idx = (int8_t)(bulk_xfers.idx+1); if (bulk_xfers.idx == bulk_xfers.n_pending) bulk_xfers.idx = 0;
       if (is_nak_mask_set(ep->dev_addr, ep->ep_addr))
       {
-        //continue; // you only get to poll it once per frame
+        continue; // you only get to poll it once per frame
       }
       _hw_setup_epx_from_ep(ep);
       active_xfer.pht = &bulk_xfers;
@@ -603,6 +603,14 @@ static void __tusb_irq_path_func(hcd_rp2040_irq)(void)
 
   if ( usb_hw->sie_status & USB_SIE_STATUS_NAK_REC_BITS )
   {
+    // The RP2040 can neither stop current transaction on NAK not raise an IRQ
+    // on that event, so if device repeatedly NAKs transfers, the USB Host keeps
+    // resending packet until it gets ACKed or ony other USB error occurs.
+    // At the same time, if it was ACKed after a NAK, both NAK_REC and BUFF_STATUS
+    // bits are set, in this case we should _not_ drop the data and clear the
+    // stray NAK_REC.
+    // RP2350 supports stop/IRQ on NAK so this event can be handled correctly there.
+#if 0
     // control transfers auto-retry on NAK
     // Bulk and Interrupt transfers do not
     if (!is_control_xfer)
@@ -610,6 +618,7 @@ static void __tusb_irq_path_func(hcd_rp2040_irq)(void)
       drop_data = true;
       nak_mask[current_daddr-1] = get_nak_mask_val(current_edpt);
     }
+#endif
     usb_hw_clear->sie_status = USB_SIE_STATUS_NAK_REC_BITS;
   }
   if (usb_hw->sie_status & USB_SIE_STATUS_RX_TIMEOUT_BITS)
@@ -624,8 +633,9 @@ static void __tusb_irq_path_func(hcd_rp2040_irq)(void)
     {
       usb_hw_clear->buf_status = 0x01;
     }
-    else
+    else {
       hw_handle_buff_status();
+    }
   }
 
   if ( status & USB_INTS_TRANS_COMPLETE_BITS )
@@ -1047,7 +1057,7 @@ bool hcd_edpt_xfer(uint8_t rhport, uint8_t dev_addr, uint8_t ep_addr, uint8_t * 
   
   // schedule next transfer
   // KLUDGE KLUDGE KLUDGE - disable interrupts for the hcd_schedule_next_transfer() duration
-  if (1) {
+  if (0) {
     uint32_t saved_irqs=save_and_disable_interrupts();
     hcd_schedule_next_transfer();
     restore_interrupts(saved_irqs);
