@@ -391,6 +391,14 @@ void __tusb_irq_path_func(_hw_epx_xfer_start)(uint8_t dev_addr, uint8_t ep_addr,
   epx.active = true;
 }
 
+void __tusb_irq_path_func(_hw_epx_xfer_abort)() {
+  uint32_t sie_ctrl = usb_hw->sie_ctrl;
+  usb_hw->sie_ctrl = sie_ctrl | USB_SIE_CTRL_STOP_TRANS_BITS;
+  busy_wait_at_least_cycles(12);
+  usb_hw->sie_ctrl = sie_ctrl;
+  epx.active = false;
+}
+
 // Scheduling algorithm:
 // Isochronous transfers are not supported. Encountering one will cause
 // an assert.
@@ -610,21 +618,24 @@ static void __tusb_irq_path_func(hcd_rp2040_irq)(void)
     // bits are set, in this case we should _not_ drop the data and clear the
     // stray NAK_REC.
     // RP2350 supports stop/IRQ on NAK so this event can be handled correctly there.
-#if 0
-    // control transfers auto-retry on NAK
-    // Bulk and Interrupt transfers do not
-    if (!is_control_xfer)
+#if 1
+    // control and bulk transfers auto-retry on NAK
+    // interrupt transfers get their data dropped
+    if ((!is_control_xfer) && (active_xfer.pht != NULL))
     {
-      drop_data = true;
-      nak_mask[current_daddr-1] = get_nak_mask_val(current_edpt);
+      if (ep_pool[active_xfer.idx].transfer_type != TUSB_XFER_BULK) {
+        drop_data = true;
+        nak_mask[current_daddr-1] = get_nak_mask_val(current_edpt);
+      }
     }
 #endif
     usb_hw_clear->sie_status = USB_SIE_STATUS_NAK_REC_BITS;
   }
   if (usb_hw->sie_status & USB_SIE_STATUS_RX_TIMEOUT_BITS)
   {
-    usb_hw_clear->sie_status = USB_SIE_STATUS_RX_TIMEOUT_BITS;
     drop_data = true;
+    usb_hw_clear->sie_status = USB_SIE_STATUS_RX_TIMEOUT_BITS;
+    _hw_epx_xfer_abort();
   }
   if ( status & USB_INTS_BUFF_STATUS_BITS )
   {
@@ -671,6 +682,13 @@ static void __tusb_irq_path_func(hcd_rp2040_irq)(void)
   {
     handled |= USB_INTS_ERROR_RX_TIMEOUT_BITS;
     usb_hw_clear->sie_status = USB_SIE_STATUS_RX_TIMEOUT_BITS;
+    if (active_xfer.pht != NULL)
+    {
+      *ep_pool[active_xfer.idx].buffer_control = *epx.buffer_control;
+      ep_pool[active_xfer.idx].next_pid = epx.next_pid;
+      hw_del_pending_xfer(active_xfer.pht, (uint8_t)active_xfer.idx);
+    }
+    if (epx.active) hw_xfer_complete(&epx, XFER_RESULT_TIMEOUT);
   }
 
   if ( status ^ handled )
