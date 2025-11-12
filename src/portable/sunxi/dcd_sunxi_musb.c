@@ -99,22 +99,12 @@ static void usb_phy_write(int addr, int data, int len)
 	}
 }
 
-static void delay_ms(uint32_t ms)
-{
-#if CFG_TUSB_OS == OPT_OS_NONE
-  int now = board_millis();
-  while (board_millis() - now <= ms) asm("nop");
-#else
-  osal_task_delay(ms);
-#endif
-}
-
 static void USBC_HardwareReset(void)
 {
   // Reset phy and controller
   USBC_REG_set_bit_l(USBPHY_CLK_RST_BIT, USBPHY_CLK_REG);
 	USBC_REG_set_bit_l(BUS_RST_USB_BIT, BUS_CLK_RST_REG);
-  delay_ms(2);
+  tusb_time_delay_ms_api(2);
 
 	USBC_REG_set_bit_l(USBPHY_CLK_GAT_BIT, USBPHY_CLK_REG);
   USBC_REG_set_bit_l(USBPHY_CLK_RST_BIT, USBPHY_CLK_REG);
@@ -186,7 +176,7 @@ static void USBC_ForceVbusValidToHigh(void)
 	USBC_Writel(reg_val, USBC_REG_ISCR(USBC0_BASE));
 }
 
-void USBC_SelectBus(u32 io_type, u32 ep_type, u32 ep_index)
+static void USBC_SelectBus(u32 io_type, u32 ep_type, u32 ep_index)
 {
 	u32 reg_val = 0;
 
@@ -962,7 +952,7 @@ void dcd_remote_wakeup(uint8_t rhport)
 {
   (void)rhport;
   USBC_REG_set_bit_b(USBC_BP_POWER_D_RESUME, USBC_REG_PCTL(USBC0_BASE));
-  delay_ms(10);
+  tusb_time_delay_ms_api(10);
   USBC_REG_clear_bit_b(USBC_BP_POWER_D_RESUME, USBC_REG_PCTL(USBC0_BASE));
 }
 

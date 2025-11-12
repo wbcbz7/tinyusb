@@ -21,19 +21,34 @@ runs:
 
     - name: Install Toolchain
       if: steps.cache-toolchain-download.outputs.cache-hit != 'true'
+      env:
+        TOOLCHAIN: ${{ inputs.toolchain }}
+        TOOLCHAIN_URL: ${{ inputs.toolchain_url }}
       run: |
-        mkdir -p ~/cache/${{ inputs.toolchain }}
-        wget --progress=dot:giga ${{ inputs.toolchain_url }} -O toolchain.tar.gz
-        if [[ ${{ inputs.toolchain }} == rx-gcc ]]; then
-          mv toolchain.tar.gz toolchain.run
+        mkdir -p ~/cache/${TOOLCHAIN}
+
+        if [[ ${TOOLCHAIN} == rx-gcc ]]; then
+          wget --progress=dot:giga ${TOOLCHAIN_URL} -O toolchain.run
           chmod +x toolchain.run
-          ./toolchain.run -p ~/cache/${{ inputs.toolchain }}/gnurx -y
+          ./toolchain.run -p ~/cache/${TOOLCHAIN}/gnurx -y
+        elif [[ ${TOOLCHAIN} == arm-iar ]]; then
+          wget --progress=dot:giga https://netstorage.iar.com/FileStore/STANDARD/001/003/926/iar-lmsc-tools_1.8_amd64.deb -O ~/cache/${TOOLCHAIN}/iar-lmsc-tools.deb
+          wget --progress=dot:giga ${TOOLCHAIN_URL} -O ~/cache/${TOOLCHAIN}/cxarm.deb
         else
-          tar -C ~/cache/${{ inputs.toolchain }} -xaf toolchain.tar.gz
+          wget --progress=dot:giga ${TOOLCHAIN_URL} -O toolchain.tar.gz
+          tar -C ~/cache/${TOOLCHAIN} -xaf toolchain.tar.gz
         fi
       shell: bash
 
-    - name: Set Toolchain Path
+    - name: Setup Toolchain
+      env:
+        TOOLCHAIN: ${{ inputs.toolchain }}
       run: |
-        echo >> $GITHUB_PATH `echo ~/cache/${{ inputs.toolchain }}/*/bin`
+        if [[ ${TOOLCHAIN} == arm-iar ]]; then
+          sudo dpkg -i ~/cache/${TOOLCHAIN}/iar-lmsc-tools.deb
+          sudo apt install -y ~/cache/${TOOLCHAIN}/cxarm.deb
+          echo >> $GITHUB_PATH "/opt/iar/cxarm/arm/bin"
+        else
+          echo >> $GITHUB_PATH `echo ~/cache/${TOOLCHAIN}/*/bin`
+        fi
       shell: bash
